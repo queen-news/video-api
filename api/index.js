@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // السماح لمدونة بلوجر بالاتصال بالـ API
+  // إعدادات جدار حماية CORS للربط مع بلوجر
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,83 +10,93 @@ export default async function handler(req, res) {
 
   const videoUrl = req.query.url;
   if (!videoUrl) {
-    return res.status(400).json({ error: 'يرجى إدخال رابط فيديو' });
+    return res.status(400).json({ error: 'يرجى وضع رابط فيديو صحيح' });
   }
 
-  // إرسال هوية متصفح حقيقي لتجاوز الحظر
-  const browserHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json'
-  };
-
-  try {
-    // 1. معالج تيك توك المباشر والسريع
-    if (videoUrl.includes('tiktok.com')) {
-      const tikRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(videoUrl)}`, { headers: browserHeaders });
+  // 1. معالج تيك توك المباشر بواسطة (TikWM POST)
+  if (videoUrl.includes('tiktok.com')) {
+    try {
+      const body = new URLSearchParams({ url: videoUrl, hd: '1' });
+      const tikRes = await fetch('https://www.tikwm.com/api/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+        },
+        body: body
+      });
       const tikData = await tikRes.json();
-      if (tikData && tikData.code === 0 && tikData.data) {
+      if (tikData && tikData.data && (tikData.data.play || tikData.data.hdplay)) {
         return res.status(200).json({
           url: tikData.data.hdplay || tikData.data.play,
           title: tikData.data.title || 'TikTok Video'
         });
       }
-    }
+    } catch(e) {}
+  }
 
-    // 2. معالج يوتيوب و Shorts
-    if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
-      const match = videoUrl.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/);
-      const ytId = (match && match[2].length === 11) ? match[2] : null;
+  // 2. معالج يوتيوب المباشر (Invidious Array)
+  if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
+    const match = videoUrl.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/);
+    const ytId = (match && match[2].length === 11) ? match[2] : null;
 
-      if (ytId) {
-        const ytEndpoints = [
-          `https://api.piped.video/streams/${ytId}`,
-          `https://pipedapi.kavin.rocks/streams/${ytId}`
-        ];
-        for (let ep of ytEndpoints) {
-          try {
-            const ytRes = await fetch(ep, { headers: browserHeaders });
-            if (!ytRes.ok) continue;
-            const ytData = await ytRes.json();
-            if (ytData && ytData.videoStreams && ytData.videoStreams.length > 0) {
-              return res.status(200).json({
-                url: ytData.videoStreams[0].url,
-                title: ytData.title || 'YouTube Video'
-              });
-            }
-          } catch(e) {}
-        }
+    if (ytId) {
+      const nodes = [
+        `https://inv.nadeko.net/api/v1/videos/${ytId}`,
+        `https://yewtu.be/api/v1/videos/${ytId}`,
+        `https://invidious.nerdvpn.de/api/v1/videos/${ytId}`
+      ];
+
+      for (let node of nodes) {
+        try {
+          const ytRes = await fetch(node, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+          });
+          if (!ytRes.ok) continue;
+          const ytData = await ytRes.json();
+          if (ytData && ytData.formatStreams && ytData.formatStreams.length > 0) {
+            return res.status(200).json({
+              url: ytData.formatStreams[0].url,
+              title: ytData.title || 'YouTube Video'
+            });
+          }
+        } catch(e) {}
       }
     }
-
-    // 3. معالج إنستغرام وفيسبوك والسيرفرات العامة
-    const cobaltNodes = [
-      'https://co.wuk.sh/api/json',
-      'https://api.cobalt.tools/api/json'
-    ];
-
-    for (let node of cobaltNodes) {
-      try {
-        const cobRes = await fetch(node, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          },
-          body: JSON.stringify({ url: videoUrl, videoQuality: 'max', noWatermark: true })
-        });
-        const cobData = await cobRes.json();
-        if (cobData && (cobData.url || cobData.picker)) {
-          return res.status(200).json({
-            url: cobData.url || (cobData.picker ? cobData.picker[0].url : '')
-          });
-        }
-      } catch(e) {}
-    }
-
-    return res.status(500).json({ error: 'تعذر جلب الفيديو، تأكد من أن المقطع عام' });
-
-  } catch (error) {
-    return res.status(500).json({ error: 'خطأ في الخادم' });
   }
+
+  // 3. معالج إنستغرام وفيسبوك المباشر
+  try {
+    const genRes = await fetch(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(videoUrl)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    });
+    const genData = await genRes.json();
+    if (genData && (genData.video || genData.url)) {
+      return res.status(200).json({
+        url: genData.video || genData.url,
+        title: 'Video'
+      });
+    }
+  } catch(e) {}
+
+  // 4. معالج Cobalt المباشر الاحتياطي
+  try {
+    const cobRes = await fetch('https://co.wuk.sh/api/json', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      body: JSON.stringify({ url: videoUrl, videoQuality: 'max', noWatermark: true })
+    });
+    const cobData = await cobRes.json();
+    if (cobData && (cobData.url || cobData.picker)) {
+      return res.status(200).json({
+        url: cobData.url || (cobData.picker ? cobData.picker[0].url : '')
+      });
+    }
+  } catch(e) {}
+
+  return res.status(500).json({ error: 'تعذر جلب الفيديو، تأكد من أن الفيديو عام وتجربة رابط آخر' });
 }
