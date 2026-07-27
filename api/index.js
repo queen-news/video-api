@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // إعدادات CORS المباشرة لبلوجر
+  // إعدادات CORS للسماح لمدونة بلوجر بالاتصال بالسيرفر
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -18,11 +18,12 @@ export default async function handler(req, res) {
   if (matchUrl) videoUrl = matchUrl[0];
 
   const browserHeaders = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*'
   };
 
   try {
-    let extractedUrl = null;
+    let downloadUrl = null;
     let audioUrl = null;
 
     // 1. معالج تيك توك المباشر
@@ -38,22 +39,35 @@ export default async function handler(req, res) {
       });
       const tikData = await tikRes.json();
       if (tikData && tikData.data && (tikData.data.play || tikData.data.hdplay)) {
-        extractedUrl = tikData.data.hdplay || tikData.data.play;
+        downloadUrl = tikData.data.hdplay || tikData.data.play;
+        if (downloadUrl.startsWith('/')) downloadUrl = 'https://www.tikwm.com' + downloadUrl;
         audioUrl = tikData.data.music || null;
+        if (audioUrl && audioUrl.startsWith('/')) audioUrl = 'https://www.tikwm.com' + audioUrl;
       }
     }
 
-    // 2. معالج يوتيوب المباشر و Shorts
-    if (!extractedUrl && (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be'))) {
+    // 2. معالج فيسبوك (FB Watch / FB Reels / Posts)
+    if (!downloadUrl && (videoUrl.includes('facebook.com') || videoUrl.includes('fb.watch'))) {
+      try {
+        const fbRes = await fetch(`https://api.vkrdown.com/v2/?url=${encodeURIComponent(videoUrl)}`, { headers: browserHeaders });
+        const fbData = await fbRes.json();
+        if (fbData && fbData.data && (fbData.data.url || fbData.data.downloads)) {
+          downloadUrl = fbData.data.url || fbData.data.downloads[0].url;
+        }
+      } catch(e) {}
+    }
+
+    // 3. معالج يوتيوب المباشر و Shorts
+    if (!downloadUrl && (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be'))) {
       const match = videoUrl.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/);
       const ytId = (match && match[2].length === 11) ? match[2] : null;
 
       if (ytId) {
         const ytNodes = [
+          `https://api.piped.video/streams/${ytId}`,
+          `https://pipedapi.kavin.rocks/streams/${ytId}`,
           `https://inv.nadeko.net/api/v1/videos/${ytId}`,
-          `https://yewtu.be/api/v1/videos/${ytId}`,
-          `https://invidious.nerdvpn.de/api/v1/videos/${ytId}`,
-          `https://api.piped.video/streams/${ytId}`
+          `https://yewtu.be/api/v1/videos/${ytId}`
         ];
 
         for (let node of ytNodes) {
@@ -61,9 +75,9 @@ export default async function handler(req, res) {
             const ytRes = await fetch(node, { headers: browserHeaders });
             if (!ytRes.ok) continue;
             const ytData = await ytRes.json();
-            let streams = ytData.formatStreams || ytData.videoStreams;
+            let streams = ytData.videoStreams || ytData.formatStreams;
             if (streams && streams.length > 0) {
-              extractedUrl = streams[0].url;
+              downloadUrl = streams[0].url;
               break;
             }
           } catch(e) {}
@@ -71,40 +85,21 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. معالج إنستغرام وفيسبوك والمنصات الشاملة
-    if (!extractedUrl) {
+    // 4. معالج عام لإنستغرام والمنصات المتبقية
+    if (!downloadUrl) {
       try {
         const genRes = await fetch(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(videoUrl)}`, { headers: browserHeaders });
         const genData = await genRes.json();
         if (genData && (genData.video || genData.url)) {
-          extractedUrl = genData.video || genData.url;
+          downloadUrl = genData.video || genData.url;
         }
       } catch(e) {}
     }
 
-    // 4. معالج Cobalt المباشر
-    if (!extractedUrl) {
-      try {
-        const cobRes = await fetch('https://co.wuk.sh/api/json', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-          },
-          body: JSON.stringify({ url: videoUrl, videoQuality: 'max', noWatermark: true })
-        });
-        const cobData = await cobRes.json();
-        if (cobData && (cobData.url || cobData.picker)) {
-          extractedUrl = cobData.url || (cobData.picker ? cobData.picker[0].url : '');
-        }
-      } catch(e) {}
-    }
-
-    if (extractedUrl) {
+    if (downloadUrl) {
       return res.status(200).json({
         status: 'success',
-        downloadUrl: extractedUrl,
+        downloadUrl: downloadUrl,
         audioUrl: audioUrl
       });
     }
