@@ -46,8 +46,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2. معالج فيسبوك (FB Watch / FB Reels / Posts)
-    if (!downloadUrl && (videoUrl.includes('facebook.com') || videoUrl.includes('fb.watch'))) {
+    // 2. معالج فيسبوك وإنستغرام (FB Watch / FB Reels / Posts)
+    if (!downloadUrl) {
       try {
         const fbRes = await fetch(`https://api.vkrdown.com/v2/?url=${encodeURIComponent(videoUrl)}`, { headers: browserHeaders });
         const fbData = await fbRes.json();
@@ -57,17 +57,17 @@ export default async function handler(req, res) {
       } catch(e) {}
     }
 
-    // 3. معالج يوتيوب المباشر و Shorts
+    // 3. معالج يوتيوب المباشر التبادلي
     if (!downloadUrl && (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be'))) {
       const match = videoUrl.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/);
       const ytId = (match && match[2].length === 11) ? match[2] : null;
 
       if (ytId) {
         const ytNodes = [
-          `https://api.piped.video/streams/${ytId}`,
-          `https://pipedapi.kavin.rocks/streams/${ytId}`,
           `https://inv.nadeko.net/api/v1/videos/${ytId}`,
-          `https://yewtu.be/api/v1/videos/${ytId}`
+          `https://yewtu.be/api/v1/videos/${ytId}`,
+          `https://invidious.nerdvpn.de/api/v1/videos/${ytId}`,
+          `https://api.piped.video/streams/${ytId}`
         ];
 
         for (let node of ytNodes) {
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
             const ytRes = await fetch(node, { headers: browserHeaders });
             if (!ytRes.ok) continue;
             const ytData = await ytRes.json();
-            let streams = ytData.videoStreams || ytData.formatStreams;
+            let streams = ytData.formatStreams || ytData.videoStreams;
             if (streams && streams.length > 0) {
               downloadUrl = streams[0].url;
               break;
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4. معالج عام لإنستغرام والمنصات المتبقية
+    // 4. معالج احتياطي شامل للروابط الصعبة
     if (!downloadUrl) {
       try {
         const genRes = await fetch(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(videoUrl)}`, { headers: browserHeaders });
